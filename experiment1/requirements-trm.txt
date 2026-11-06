@@ -1,0 +1,3 @@
+# Compatibility entry point for existing TRM setup commands.
+# The main requirements now include the complete TRM environment.
+-r requirements.txt

@@ -1,0 +1,35 @@
+{
+  "repository": "https://github.com/SamsungSAILMontreal/TinyRecursiveModels",
+  "commit": "c01103738605ba39d1430519b1ee0c62f4c707f8",
+  "license": "MIT",
+  "modifications": [
+    "Import namespace: from models.* -> from vendor.tiny_recursive_models.models.*. No reasoning computations modified."
+  ],
+  "files": [
+    {
+      "path": "models/common.py",
+      "upstream_sha256": "fa749ad9b68ac0852f9cda157baa3a9c2ff8abaee973751b32b7cd010a4cf859",
+      "vendored_sha256": "fa749ad9b68ac0852f9cda157baa3a9c2ff8abaee973751b32b7cd010a4cf859"
+    },
+    {
+      "path": "models/layers.py",
+      "upstream_sha256": "519d38a4668c343868bf31a5853cab7f455f9dcac0cbcc36e02f95dce9fb01e7",
+      "vendored_sha256": "2b28b6800391acaf5ea747346888b414318759e13b1d03fa21af716c1a0c0904"
+    },
+    {
+      "path": "models/sparse_embedding.py",
+      "upstream_sha256": "9429742ce022918751331acf92c1a9b8d0f2f364e9acef5d71fb81b886c7a2d0",
+      "vendored_sha256": "28c07be4d705cf142bb1874f2a55461994ad4d1c5e077b9e6c4d1c8d0814814f"
+    },
+    {
+      "path": "models/recursive_reasoning/trm.py",
+      "upstream_sha256": "3454818b64a1abb45c062782d380aa4bb560e2cb35db9cc309cf367ca3ac262c",
+      "vendored_sha256": "2c7b58ee0f995a2bb0b67d1a59f55ad3693d932e0de497b7e895d8892aeff17c"
+    },
+    {
+      "path": "LICENSE",
+      "upstream_sha256": "d0f3040c4aa4468bf36b4e19de1bf039bd0d691703966689487bf1b42b700e6a",
+      "vendored_sha256": "d0f3040c4aa4468bf36b4e19de1bf039bd0d691703966689487bf1b42b700e6a"
+    }
+  ]
+}

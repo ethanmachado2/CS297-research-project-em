@@ -1,0 +1,67 @@
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Packaging and build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Test and coverage artifacts
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# Type-checking and tooling caches
+.mypy_cache/
+.pyright/
+.ruff_cache/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Environment and local configuration
+.env
+.env.*
+!.env.example
+
+# macOS and editor files
+.DS_Store
+.vscode/
+.idea/
+
+# Local datasets, downloaded models, and experiment artifacts.
+# Match outputs at every level, including archive/outputs/.
+/data/
+/hf_cache/
+outputs/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+*.executed.ipynb
+
+# Google Drive document pointers and local agent/service settings
+*.gdoc
+*.gsheet
+*.gslides
+/.agents/
+/.codex/
+/.aws/
+
+# Local repository upload instructions
+/GITHUB_SETUP.md
