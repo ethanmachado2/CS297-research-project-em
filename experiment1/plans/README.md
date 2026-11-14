@@ -66,7 +66,7 @@ tests/test_trm_training.py
 tests/test_trm_integration.py
 tests/test_trm_notebook.py
 scripts/validate_trm_notebook.py
-requirements-trm.txt
+requirements.txt                         # consolidated local/cloud dependencies
 ```
 
 Also make the small shared-runner extension specified in document 02 and add the new workflow to `PIPELINE.md`. Do not create a separate evaluation framework.

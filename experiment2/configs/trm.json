@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "seed": 42,
+  "split": {
+    "seed": 42,
+    "counts": [
+      35,
+      5,
+      10
+    ]
+  },
+  "preprocessing": {
+    "patch_size": 128,
+    "grid_size": 3,
+    "exif_transpose": false
+  },
+  "model": {
+    "hidden_size": 128,
+    "num_heads": 4,
+    "L_layers": 2,
+    "expansion": 4.0,
+    "H_cycles": 2,
+    "L_cycles": 2,
+    "refinement_steps": 4
+  },
+  "training": {
+    "batch_size": 8,
+    "max_epochs": 100,
+    "patience": 15,
+    "learning_rate": 0.0003,
+    "weight_decay": 0.0001,
+    "gradient_clip": 1.0,
+    "num_workers": 0,
+    "device": "cuda",
+    "precision": "float16"
+  }
+}

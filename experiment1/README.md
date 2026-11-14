@@ -4,7 +4,13 @@ This project classifies face-image degradation into three outputs: noise present
 severity, and whether to route the image to denoising. It predicts a routing
 decision; it does not execute a denoiser.
 
-This guide covers all three active experiment notebooks and the supporting TRM
+For **Colab Enterprise or GCP Workbench**, start with the self-contained
+[cloud notebooks and setup guide](notebooks/colab_enterprise/README.md). They live
+separately from the local notebooks, prepare missing data, select CUDA, and upload
+run artifacts to Cloud Storage. All workflows use the single `requirements.txt`;
+the cloud installer retains the managed runtime's Torch and Jupyter packages.
+
+This guide covers all three local experiment notebooks and the supporting TRM
 diagnostic and validation runs outside `archive/`. Commands below run from the
 **`experiment1` project root**, where this README, `src/`, and `notebooks/` live.
 Replace example output names with a fresh name for each execution.
@@ -51,12 +57,6 @@ Jupyter, and the complete test suite:
 .venv/bin/python -m pip install -r requirements.txt
 ```
 
-The old TRM-specific command remains supported and installs the same requirements:
-
-```sh
-.venv/bin/python -m pip install -r requirements-trm.txt
-```
-
 `requirements.txt` includes TRM's `einops` and `pydantic` dependencies. Its required
 upstream reasoning code is already included in `vendor/tiny_recursive_models/`;
 no separate upstream checkout or pretrained TRM download is needed.
@@ -69,7 +69,42 @@ the requirements.
 
 ### Dataset
 
-The real dataset must be extracted into this layout:
+The source is Kaggle's
+[Human Faces Augmentation dataset](https://www.kaggle.com/datasets/trainingdatapro/human-faces-augmentation-image-restoration).
+After dependency installation, prepare it from the `experiment1/` directory:
+
+```sh
+.venv/bin/python -m src.dataset_setup --project-root .
+```
+
+This reuses complete local data without network access. Otherwise it downloads
+the Kaggle dataset, locates its image folders inside any archive wrapper, checks
+membership/pixels/sizes, and installs the prepared dataset. An incomplete existing
+folder is preserved as `data/files.incomplete.<id>`. Failed downloads or validation
+leave existing files intact. Kaggle source/version information is recorded in
+`data/dataset_source.json`; cloud runs also record content hashes for all images.
+No augmentations are generated: the downloaded dataset must contain all four
+existing image groups.
+
+For reproducible downloads, pass `--kaggle-version NUMBER` after selecting the
+desired dataset version. Without it, KaggleHub resolves the latest version.
+Private or consent-restricted access requires Kaggle authorization; use
+`kagglehub.login()` or securely supply `KAGGLE_API_TOKEN`. GCP credentials do not
+authenticate to Kaggle. See [KaggleHub authentication](https://github.com/Kaggle/kagglehub#authenticate).
+
+To restore a prepared dataset from Cloud Storage instead:
+
+```sh
+.venv/bin/python -m src.dataset_setup --project-root . \
+  --gcs-uri gs://YOUR_BUCKET/experiment1/inputs/data/files
+```
+
+The GCS prefix must contain `images/` and `augmentation/` (an enclosing folder is
+also supported). Configure Application Default Credentials with permission to
+read and list those objects. A selected GCS source does not fall back to Kaggle
+on authentication or download errors.
+
+Manual preparation remains supported with this layout:
 
 ```text
 data/files/
@@ -482,6 +517,21 @@ smoke checks run when the relevant device is available; the longer overfit
 diagnostic is opt-in.
 
 ### Synthetic notebook smoke run
+
+To validate the new cloud notebooks without network access or real data:
+
+```sh
+.venv/bin/python scripts/validate_colab_notebooks.py \
+  --output outputs/colab_validation/my_new_smoke
+```
+
+This executes fresh kernels for real tiny TRM training, checkpoint-only evaluation,
+and both Qwen notebook workflows using a fixture adapter. It checks reports,
+few-shot exclusions, and local artifact provenance. It does not download Qwen or
+validate a live GPU/GCP environment. Cloud Storage calls are covered separately
+with mocked clients in the unit suite.
+
+For the original local TRM notebook:
 
 ```sh
 .venv/bin/python scripts/validate_trm_notebook.py \

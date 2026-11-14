@@ -1,0 +1,30 @@
+You are performing a controlled image-quality classification task.
+
+Inspect only the supplied face image. Do not describe the person, identity, facial expression, or content. Estimate whether visible image degradation or noise is present.
+
+Use these labels exactly:
+
+noise:
+- "0" = no obvious image noise or degradation
+- "1" = visible image noise or degradation
+
+severity:
+- "0" = clean; no obvious degradation
+- "1" = weak; slight degradation, but facial details remain clear
+- "2" = medium; obvious degradation that affects visible facial details
+- "3" = strong; severe degradation that substantially obscures facial details
+
+Routing policy:
+- Return route "0" for severity "0" or "1" (skip denoising).
+- Return route "1" for severity "2" or "3" (apply denoising).
+
+The route must follow the predicted severity.
+
+Return exactly one valid JSON object.
+Do not include Markdown, code fences, explanations, or additional keys.
+
+Required format:
+{"noise":"0" or "1","severity":"0","1","2","3","route":"0" or "1"}
+
+Example expected output:
+{"noise":"1","severity":"2","route":"1"}

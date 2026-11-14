@@ -25,7 +25,11 @@ These settings are initial hypotheses. Accuracy is not guaranteed and is not an 
 
 `auto` selects CUDA when available, otherwise MPS, otherwise CPU; print and save the choice. Explicit unavailable devices fail clearly. Do not silently move training to CPU after a device error. Avoid CUDA-specific optimizers, mandatory mixed precision, distributed training, `torch.compile`, or external experiment trackers in this first version.
 
-Create `requirements-trm.txt` for the additional imports actually required by the pinned upstream modules, with versions verified in the chosen environment. Reuse installed project dependencies where compatible and leave the existing Qwen requirements intact. If the current Python/runtime cannot support required packages, document a separate `.venv-trm` kernel rather than changing the Qwen environment. Setup/install commands belong in documentation, not auto-install notebook cells.
+The original plan proposed a separate TRM requirements file. Dependencies are now
+consolidated in `requirements.txt`; no TRM-specific requirements entry point remains.
+Local notebooks keep installation in documentation. The separate Colab Enterprise
+notebooks include an explicit bootstrap cell and preserve the managed Torch/Jupyter
+stack through `scripts/install_cloud_dependencies.py`.
 
 ## Trainer
 

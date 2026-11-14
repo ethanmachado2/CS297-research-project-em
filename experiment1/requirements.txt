@@ -38,3 +38,7 @@ regex==2026.9.29
 requests==2.34.2
 tqdm==4.70.1
 typing_extensions==4.16.0
+
+# Dataset preparation and cloud artifact storage (also used by local setup).
+kagglehub>=1.0.3,<2
+google-cloud-storage>=3.1,<4
