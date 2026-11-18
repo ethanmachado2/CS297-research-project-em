@@ -24,9 +24,10 @@ class StructureTests(unittest.TestCase):
                     modules = [node.module or ""]
                 self.assertFalse(any(name.startswith(("google", "experiment1")) for name in modules), path)
 
-    def test_three_clean_notebooks_compile_and_call_matching_workload(self):
+    def test_clean_notebooks_compile_and_call_matching_workload(self):
         notebooks = sorted((PROJECT / "notebooks").glob("*.ipynb"))
-        self.assertEqual(len(notebooks), 3)
+        self.assertEqual({path.stem for path in notebooks},
+                         {"qwen_single_shot", "qwen_few_shot", "trm_supervised", "vitrm_supervised"})
         for path in notebooks:
             notebook = json.loads(path.read_text())
             self.assertEqual(notebook["nbformat"], 4)

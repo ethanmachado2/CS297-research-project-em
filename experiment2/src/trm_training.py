@@ -5,6 +5,7 @@ Invoked by python -m src.run trm_supervised
 from __future__ import annotations
 
 import copy
+from contextlib import nullcontext
 from datetime import datetime, timezone
 import importlib.metadata
 import json
@@ -25,6 +26,25 @@ from .trm_data import (FaceSeverityDataset, create_subject_split, file_sha256,
                        manifest_digest, partition_frame, validate_image_sizes,
                        validate_preprocessing)
 from .trm_model import UPSTREAM_SHA, VisionTRM, validate_model_config
+from .vitrm_model import (IMPLEMENTATION, PAPER_URL, VisionViTRM,
+                          validate_model_config as validate_vitrm_config)
+
+
+def architecture(config):
+    name = config.get("architecture", "trm")
+    if name not in {"trm", "vitrm"}:
+        raise ValueError(f"Unsupported architecture: {name}")
+    return name
+
+
+def build_model(config):
+    model_type = VisionViTRM if architecture(config) == "vitrm" else VisionTRM
+    return model_type(config["model"], patch_count=config["preprocessing"]["grid_size"] ** 2)
+
+
+def autocast_context(device, precision):
+    return (torch.autocast(device_type="cuda", dtype=torch.float16)
+            if device.type == "cuda" and precision == "float16" else nullcontext())
 
 
 def atomic_json(path, value):
@@ -64,13 +84,18 @@ def validate_config(config):
     if config.get("schema_version") != 1:
         raise ValueError("Unsupported experiment schema version")
     validate_preprocessing(config["preprocessing"])
-    validate_model_config(config["model"])
+    is_vitrm = architecture(config) == "vitrm"
+    (validate_vitrm_config if is_vitrm else validate_model_config)(config["model"])
+    if is_vitrm and config["model"]["token_grid"] > (config["preprocessing"]["patch_size"] + 7) // 8:
+        raise ValueError("token_grid exceeds the CNN feature map")
     for value in (config["seed"], config["split"]["seed"]):
         if type(value) is not int or not 0 <= value < 2 ** 32:
             raise ValueError("Seeds must be nonnegative 32-bit integers")
     train = config["training"]
-    if train.get("precision") != "float16":
+    if train.get("precision") != "float16" and not (is_vitrm and train.get("precision") == "float32"):
         raise ValueError("Experiment 2 requires FP16 AMP")
+    if train.get("device") not in {"auto", "cpu", "cuda", "mps"}:
+        raise ValueError("Unsupported training device")
     for key in ("batch_size", "max_epochs", "patience"):
         if type(train[key]) is not int or train[key] <= 0:
             raise ValueError(f"{key} must be a positive integer")
@@ -81,9 +106,9 @@ def validate_config(config):
             raise ValueError(f"Invalid {key}")
 
 
-def environment_info(device):
+def environment_info(device, precision="float16"):
     return {"python": platform.python_version(), "platform": platform.platform(), "device": str(device),
-            "dtype": "float16_autocast", "parameter_dtype": "float32", "libraries": {name: importlib.metadata.version(name)
+            "dtype": "float16_autocast" if precision == "float16" else "float32", "parameter_dtype": "float32", "libraries": {name: importlib.metadata.version(name)
                 for name in ("torch", "numpy", "pandas", "Pillow", "pydantic", "einops")}}
 
 
@@ -91,10 +116,19 @@ def validation_metrics(model, loader, device):
     model.eval()
     total_loss = total = correct = 0
     matrix = torch.zeros(4, 4, dtype=torch.int64)
+    step_outputs, all_targets = [], []
     with torch.inference_mode():
         for patches, targets in loader:
-            with torch.autocast(device_type="cuda", dtype=torch.float16):
-                logits = model(patches.to(device))
+            with autocast_context(device, getattr(model, "precision", "float16")):
+                if isinstance(model, VisionViTRM):
+                    steps = model.forward_steps(patches.to(device))
+                    if not torch.isfinite(steps).all():
+                        raise FloatingPointError("Non-finite validation refinement logits")
+                    step_outputs.append(steps.float().cpu())
+                    all_targets.append(targets.cpu())
+                    logits = steps[:, -1]
+                else:
+                    logits = model(patches.to(device))
             targets = targets.to(device)
             if not torch.isfinite(logits).all():
                 raise FloatingPointError("Non-finite validation logits")
@@ -111,7 +145,15 @@ def validation_metrics(model, loader, device):
     for i in range(4):
         denominator = matrix[i].sum().item() + matrix[:, i].sum().item()
         f1.append(2 * matrix[i, i].item() / denominator if denominator else 0.0)
-    return {"loss": total_loss / total, "accuracy": correct / total, "macro_f1": sum(f1) / 4, "images": total}
+    result = {"loss": total_loss / total, "accuracy": correct / total, "macro_f1": sum(f1) / 4, "images": total}
+    if step_outputs:
+        steps, truths = torch.cat(step_outputs), torch.cat(all_targets)
+        result["refinements"] = [{"step": index + 1,
+            "loss": nn.functional.cross_entropy(logits, truths).item(),
+            "accuracy": (logits.argmax(-1) == truths).float().mean().item(),
+            "probability_std": logits.softmax(-1).std(dim=0, correction=0).mean().item()}
+            for index, logits in enumerate(steps.unbind(dim=1))]
+    return result
 
 
 def load_checkpoint(path, device="cpu"):
@@ -120,13 +162,17 @@ def load_checkpoint(path, device="cpu"):
     if checkpoint.get("schema_version") != 1:
         raise ValueError("Unsupported checkpoint schema version")
     validate_config(checkpoint["config"])
-    if checkpoint["upstream_sha"] != UPSTREAM_SHA:
+    is_vitrm = architecture(checkpoint["config"]) == "vitrm"
+    if is_vitrm and checkpoint.get("implementation") != IMPLEMENTATION:
+        raise ValueError("Checkpoint ViTRM implementation does not match installed source")
+    if not is_vitrm and checkpoint["upstream_sha"] != UPSTREAM_SHA:
         raise ValueError("Checkpoint upstream source does not match installed TRM")
     if checkpoint["split"].get("schema_version") != 1 or manifest_digest(checkpoint["split"]) != checkpoint["split_digest"]:
         raise ValueError("Checkpoint split schema/digest mismatch")
     chosen_device = select_device(device)
     config = checkpoint["config"]
-    model = VisionTRM(config["model"], patch_count=config["preprocessing"]["grid_size"] ** 2)
+    model = build_model(config)
+    model.precision = config["training"]["precision"]
     model.load_state_dict(checkpoint["model_state"], strict=True)
     model.to(chosen_device).eval()
     return model, checkpoint
@@ -140,16 +186,23 @@ def train_experiment(dataset, project_root, session_dir, config, *, show_progres
     if manifest_path.exists() or (session / "checkpoints/best.pt").exists():
         raise FileExistsError(f"Training session already exists: {session}")
     started = perf_counter()
+    is_vitrm = architecture(config) == "vitrm"
+    provenance = ({"architecture": "vitrm", "implementation": IMPLEMENTATION, "paper_url": PAPER_URL,
+                   "upstream_sha": None, "training_scheme": "full_unroll_mean_cross_entropy"}
+                  if is_vitrm else {"upstream_sha": UPSTREAM_SHA})
     manifest = {"schema_version": 1, "status": "running", "started_at": datetime.now(timezone.utc).isoformat(),
-                "config": copy.deepcopy(config), "upstream_sha": UPSTREAM_SHA, "optimizer_updates": 0}
+                "config": copy.deepcopy(config), **provenance, "optimizer_updates": 0}
     atomic_json(manifest_path, manifest)
     best_path = session / "checkpoints/best.pt"
     history, best_loss, stale, updates = [], float("inf"), 0, 0
     try:
         validate_config(config)
         device = select_device(config["training"]["device"])
-        if device.type != "cuda":
+        precision = config["training"]["precision"]
+        if not is_vitrm and device.type != "cuda":
             raise RuntimeError("Experiment 2 FP16 training requires CUDA")
+        if precision == "float16" and device.type != "cuda":
+            raise ValueError("FP16 training requires CUDA; use float32 for a local ViTRM check")
         seed_everything(config["seed"])
         atomic_json(session / "config.json", config)
         split = create_subject_split(dataset, config["split"]["seed"], project_root=project_root,
@@ -165,33 +218,46 @@ def train_experiment(dataset, project_root, session_dir, config, *, show_progres
             generator=torch.Generator().manual_seed(config["seed"]))
         val_loader = DataLoader(FaceSeverityDataset(val_frame, config["preprocessing"]),
             batch_size=opts["batch_size"], shuffle=False, num_workers=opts["num_workers"])
-        model = VisionTRM(config["model"], patch_count=config["preprocessing"]["grid_size"] ** 2).to(device)
-        scaler = torch.amp.GradScaler("cuda")
+        model = build_model(config).to(device)
+        model.precision = precision
+        scaler = torch.amp.GradScaler("cuda", enabled=precision == "float16")
         skipped_updates = 0
         optimizer = torch.optim.AdamW(model.parameters(), lr=opts["learning_rate"], weight_decay=opts["weight_decay"])
-        manifest.update(environment=environment_info(device), parameter_counts=model.parameter_counts(),
+        manifest.update(environment=environment_info(device, precision), parameter_counts=model.parameter_counts(),
                         train_images=len(train_frame), validation_images=len(val_frame), split_digest=manifest_digest(split))
         atomic_json(manifest_path, manifest)
         for epoch in range(1, opts["max_epochs"] + 1):
             model.train()
             weighted_loss = step_images = training_images = 0
+            encoder_gradient_norms = []
             epoch_started = perf_counter()
             for patches, targets in train_loader:
                 patches, targets = patches.to(device), targets.to(device)
-                with torch.autocast(device_type="cuda", dtype=torch.float16):
-                    state = model.initial_state(len(targets), device)
+                if not is_vitrm:
+                    with autocast_context(device, precision):
+                        state = model.initial_state(len(targets), device)
                 training_images += len(targets)
-                for _ in range(config["model"]["refinement_steps"]):
+                for _ in range(1 if is_vitrm else config["model"]["refinement_steps"]):
                     optimizer.zero_grad(set_to_none=True)
-                    with torch.autocast(device_type="cuda", dtype=torch.float16):
-                        encoded = model.encode(patches)
-                        state, logits = model.refine_once(encoded, state)
-                        loss = nn.functional.cross_entropy(logits, targets)
+                    with autocast_context(device, precision):
+                        if is_vitrm:
+                            logits = model.forward_steps(patches)
+                            loss = nn.functional.cross_entropy(logits.flatten(0, 1),
+                                targets[:, None].expand(-1, logits.shape[1]).reshape(-1))
+                        else:
+                            encoded = model.encode(patches)
+                            state, logits = model.refine_once(encoded, state)
+                            loss = nn.functional.cross_entropy(logits, targets)
                     if not torch.isfinite(loss):
                         raise FloatingPointError("Non-finite training loss")
                     scaler.scale(loss).backward()
                     scaler.unscale_(optimizer)
-                    nn.utils.clip_grad_norm_(model.parameters(), opts["gradient_clip"])
+                    if is_vitrm:
+                        encoder_gradient_norms.append(math.sqrt(sum(
+                            p.grad.float().square().sum().item() for p in model.encoder.parameters()
+                            if p.grad is not None)))
+                    nn.utils.clip_grad_norm_(model.parameters(), opts["gradient_clip"],
+                                             error_if_nonfinite=is_vitrm and precision == "float32")
                     previous_scale = scaler.get_scale()
                     scaler.step(optimizer)
                     scaler.update()
@@ -207,7 +273,7 @@ def train_experiment(dataset, project_root, session_dir, config, *, show_progres
                 best_loss, stale = val["loss"], 0
                 checkpoint = {"schema_version": 1, "model_state": {key: value.detach().cpu().clone()
                     for key, value in model.state_dict().items()}, "config": copy.deepcopy(config),
-                    "split": split, "split_digest": manifest_digest(split), "upstream_sha": UPSTREAM_SHA,
+                    "split": split, "split_digest": manifest_digest(split), **provenance,
                     "epoch": epoch, "validation_loss": best_loss, "training_status": "running",
                     "optimizer_updates": updates, "training_session": str(session.resolve())}
                 atomic_checkpoint(best_path, checkpoint)
@@ -218,6 +284,11 @@ def train_experiment(dataset, project_root, session_dir, config, *, show_progres
                             "training_images": training_images, "validation_loss": val["loss"],
                             "severity_accuracy": val["accuracy"], "severity_macro_f1": val["macro_f1"],
                             "optimizer_updates": updates, "skipped_updates": skipped_updates, "amp_scale": scaler.get_scale(), "elapsed_seconds": perf_counter() - epoch_started})
+            if is_vitrm:
+                history[-1]["encoder_gradient_norm"] = sum(encoder_gradient_norms) / len(encoder_gradient_norms)
+                for step in val["refinements"]:
+                    history[-1].update({f"validation_step_{step['step']}_{key}": value
+                                       for key, value in step.items() if key != "step"})
             temporary = session / "training_history.csv.tmp"
             pd.DataFrame(history).to_csv(temporary, index=False)
             os.replace(temporary, session / "training_history.csv")

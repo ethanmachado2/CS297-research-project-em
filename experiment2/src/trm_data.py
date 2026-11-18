@@ -61,7 +61,8 @@ def validate_dataset(dataset):
     return frame
 
 
-def create_subject_split(dataset, seed=42, *, project_root=None, counts=(35, 5, 10)):
+def create_subject_split(dataset, seed=42, *, project_root=None, counts=(35, 5, 10),
+                         fold_index=None, folds=5):
     """Save portable membership, labels and content hashes (default 50 people)."""
     frame = validate_dataset(dataset)
     root = Path(project_root or Path.cwd()).resolve()
@@ -72,6 +73,15 @@ def create_subject_split(dataset, seed=42, *, project_root=None, counts=(35, 5, 
         raise ValueError(f"Expected {sum(counts)} people / {4 * sum(counts)} images; found {len(ids)} people")
     shuffled = np.random.default_rng(seed).permutation(ids).tolist()
     manifest = {"schema_version": 1, "seed": seed, "counts": list(counts), "partitions": {}}
+    if fold_index is not None:
+        if (type(folds) is not int or folds < 2 or type(fold_index) is not int or
+                not 0 <= fold_index < folds or counts[2] * folds != len(ids)):
+            raise ValueError("Grouped folds require a valid fold index and equal test groups covering all subjects")
+        # Fold zero exactly preserves the original split. Rotating the seeded
+        # permutation makes each subject a test subject once across the folds.
+        offset = counts[2] * fold_index
+        shuffled = shuffled[offset:] + shuffled[:offset]
+        manifest.update(schema_version=2, fold_index=fold_index, folds=folds)
     offset = 0
     for partition, count in zip(PARTITIONS, counts):
         subjects = shuffled[offset:offset + count]
@@ -88,10 +98,12 @@ def create_subject_split(dataset, seed=42, *, project_root=None, counts=(35, 5, 
 
 def validate_subject_split(manifest, dataset, project_root):
     """Reject changed labels/content, incomplete membership and partition overlap."""
-    if manifest.get("schema_version") != 1:
+    if manifest.get("schema_version") not in (1, 2):
         raise ValueError("Unsupported split schema version")
+    fold_args = ({"fold_index": manifest["fold_index"], "folds": manifest["folds"]}
+                 if manifest["schema_version"] == 2 else {})
     expected = create_subject_split(dataset, manifest["seed"], project_root=project_root,
-                                    counts=manifest["counts"])
+                                    counts=manifest["counts"], **fold_args)
     # Saved row ordering is authoritative and may differ from the current frame.
     def normalized(value):
         value = json.loads(json.dumps(value))
