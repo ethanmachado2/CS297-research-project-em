@@ -153,6 +153,50 @@ accuracy. CUDA validation still requires a GPU runtime.
 
 ### Controlled moment-encoder comparison
 
+For the focused encoder-versus-recursion comparison, use
+`src.encoder_comparison`. It implements three explicitly named variants:
+
+| Variant | Visual input | Recursive reasoning |
+| --- | --- | --- |
+| `linear_vitrm` | Flattened 32×32 RGB cells projected by one linear layer | Shared ViTRM |
+| `moment_vitrm` | Existing CNN/RGB mean-and-standard-deviation moments | Shared ViTRM |
+| `moment_direct` | Existing CNN/RGB moment encoder | Mean pooling plus a direct classifier |
+
+All variants use the same 144-token layout, positional embeddings, subject
+split, initialization seeds, minibatch order, AdamW settings, epoch budget,
+and validation-loss checkpoint selection. The test pixels are loaded only
+after every variant and seed has selected a checkpoint. This isolates the
+effect of the visual encoder from the effect of recursive reasoning more
+cleanly than comparing unrelated model families. The linear encoder is a
+cell-level linear projection, matching the paper's minimal visual-front-end
+idea while retaining the experiment's 144-token spatial layout.
+
+Run the comparison on Kaggle with a validated dataset root:
+
+```bash
+python -m src.encoder_comparison \
+  --dataset-root /kaggle/input/your-dataset \
+  --output outputs/encoder_comparison \
+  --device cuda \
+  --epochs 10 \
+  --seeds 42 43 44
+```
+
+To reuse an existing subject split, pass its saved manifest:
+
+```bash
+python -m src.encoder_comparison \
+  --dataset-root /kaggle/input/your-dataset \
+  --reference-split outputs/YOUR_REFERENCE_RUN/split.json \
+  --output outputs/encoder_comparison \
+  --device cuda
+```
+
+The runner writes `comparison_runs.csv`, `comparison_summary.csv`, one
+checkpoint and training history per variant/seed, and `protocol.json`.
+`comparison_summary.csv` reports mean and standard deviation across
+initialization seeds; those repetitions are not independent datasets.
+
 `src.moment_ablation` compares mean-pooled linear and MLP classifiers, the old
 TRM recurrence, and separately trained one- and two-refinement ViTRMs. Defaults
 are 10 epochs and initialization seeds 42, 43, and 44, with the same 140/20/40
