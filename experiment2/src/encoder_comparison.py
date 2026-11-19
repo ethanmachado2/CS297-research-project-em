@@ -9,6 +9,10 @@ recursive reasoning:
 * ``moment_direct``: the same CNN/RGB-moment encoder and positional features,
   mean pooled and sent directly to a classifier.
 
+Recursive variants may be suffixed with ``_1``, ``_2``, or ``_4`` to select
+the trained refinement depth, for example ``linear_vitrm_4``. The direct
+classifier is evaluated once as the zero-recursion baseline.
+
 This is intentionally separate from the historical moment_ablation runner so
 that the three scientific comparison variants have unambiguous names and a
 small, auditable protocol.
@@ -92,16 +96,24 @@ class DirectMomentClassifier(nn.Module):
 
 def make_model(variant, config):
     patch_count = config["preprocessing"]["grid_size"] ** 2
-    model_config = config["model"]
-    if variant == "linear_vitrm":
+    base_variant, separator, depth_text = variant.rpartition("_")
+    if base_variant in {"linear_vitrm", "moment_vitrm"} and separator:
+        if depth_text not in {"1", "2", "4"}:
+            raise ValueError("ViTRM comparison depth must be 1, 2, or 4")
+        model_config = copy.deepcopy(config["model"])
+        model_config["refinement_steps"] = int(depth_text)
+    else:
+        base_variant = variant
+        model_config = config["model"]
+    if base_variant == "linear_vitrm":
         model = VisionViTRM(model_config, patch_count=patch_count)
         model.encoder = LinearCellEncoder(model_config["hidden_size"],
                                           model_config["token_grid"],
                                           config["preprocessing"]["patch_size"])
         return model
-    if variant == "moment_vitrm":
+    if base_variant == "moment_vitrm":
         return VisionViTRM(model_config, patch_count=patch_count)
-    if variant == "moment_direct":
+    if base_variant == "moment_direct":
         return DirectMomentClassifier(model_config, patch_count=patch_count)
     raise ValueError(f"Unknown comparison variant: {variant}")
 
@@ -149,6 +161,10 @@ def evaluate(model, pixels, labels, device):
     with torch.inference_mode(), autocast_context(device):
         steps, final = logits_for(model, pixels.to(device))
     result = metrics(final, labels)
+    for index, step_logits in enumerate(steps.unbind(dim=1), 1):
+        step_metrics = metrics(step_logits, labels)
+        for key, value in step_metrics.items():
+            result[f"step_{index}_{key}"] = value
     result.update({"validation_steps": int(steps.shape[1]),
                    "parameter_count": sum(p.numel() for p in model.parameters())})
     return result
@@ -208,7 +224,9 @@ def train_one(variant, seed, config, train_pixels, train_labels, val_pixels, val
     model.load_state_dict(checkpoint["model_state"])
     model.to(device)
     result = evaluate(model, val_pixels, val_labels, device)
-    result.update({"variant": variant, "seed": seed, "best_epoch": best_epoch,
+    result.update({"variant": variant, "seed": seed, "reasoning_steps":
+                   model.config["refinement_steps"] if isinstance(model, VisionViTRM) else 0,
+                   "best_epoch": best_epoch,
                    "best_validation_loss": best_loss, "optimizer_updates": updates,
                    "checkpoint": str((output / "best.pt").resolve())})
     return model, result
@@ -224,10 +242,15 @@ def main():
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--seeds", type=int, nargs="+", default=[42, 43, 44])
+    parser.add_argument("--refinement-steps", type=int, nargs="+", default=[1, 2, 4],
+                        help="ViTRM depths to train; direct baseline is always run once")
     parser.add_argument("--device", choices=["cpu", "cuda"], default="cpu")
     args = parser.parse_args()
     if args.device == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA requested but unavailable")
+    if not args.refinement_steps or any(step not in {1, 2, 4} for step in args.refinement_steps):
+        raise ValueError("--refinement-steps values must be chosen from 1, 2, and 4")
+    args.refinement_steps = tuple(dict.fromkeys(args.refinement_steps))
     device = torch.device(args.device)
     config = json.loads(args.config.read_text())
     config["training"]["device"] = args.device
@@ -250,8 +273,11 @@ def main():
     val_pixels, val_labels = load_pixels(val_frame, config["preprocessing"])
     rows = []
     trained = []
+    study_variants = [f"linear_vitrm_{step}" for step in args.refinement_steps]
+    study_variants += [f"moment_vitrm_{step}" for step in args.refinement_steps]
+    study_variants.append("moment_direct")
     for seed in args.seeds:
-        for variant in VARIANTS:
+        for variant in study_variants:
             print(f"Training {variant}, seed={seed}", flush=True)
             model, row = train_one(variant, seed, config, train_pixels, train_labels,
                                    val_pixels, val_labels, args.output / variant / f"seed_{seed}",
@@ -272,7 +298,8 @@ def main():
         test_metrics = evaluate(model, test_pixels, test_labels, device)
         row = next(item for item in rows if item["variant"] == variant and item["seed"] == seed)
         row.update({f"test_{key}": value for key, value in test_metrics.items()
-                    if key in {"accuracy", "macro_f1", "mae"}})
+                    if key in {"accuracy", "macro_f1", "mae"}
+                    or key.startswith("step_")})
         del model
         if device.type == "cuda":
             torch.cuda.empty_cache()
@@ -287,7 +314,8 @@ def main():
         test_mae_mean=("test_mae", "mean"),
     ).to_csv(args.output / "comparison_summary.csv", index=False)
     (args.output / "protocol.json").write_text(json.dumps({
-        "variants": VARIANTS, "seeds": args.seeds, "epochs": args.epochs,
+        "variants": study_variants, "seeds": args.seeds, "epochs": args.epochs,
+        "refinement_steps": list(args.refinement_steps),
         "batch_size": args.batch_size, "device": args.device,
         "dataset_root": str(dataset_root), "dataset_manifest": dataset_manifest,
         "test_loaded_after_checkpoint_selection": True,

@@ -34,6 +34,14 @@ class EncoderComparisonTests(unittest.TestCase):
                       else model(pixels)[:, None])
             self.assertEqual(logits.shape, (3, 2 if variant != "moment_direct" else 1, 4))
 
+    def test_depth_suffix_controls_recursive_unroll(self):
+        config = small_config()
+        pixels = torch.rand(2, 1, 3, 16, 16)
+        for depth in (1, 2, 4):
+            model = make_model(f"linear_vitrm_{depth}", config)
+            self.assertEqual(model.config["refinement_steps"], depth)
+            self.assertEqual(model.forward_steps(pixels).shape, (2, depth, 4))
+
     def test_direct_classifier_has_no_reasoning_stack(self):
         model = make_model("moment_direct", small_config())
         self.assertIsInstance(model, DirectMomentClassifier)

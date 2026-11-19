@@ -158,8 +158,8 @@ For the focused encoder-versus-recursion comparison, use
 
 | Variant | Visual input | Recursive reasoning |
 | --- | --- | --- |
-| `linear_vitrm` | Flattened 32×32 RGB cells projected by one linear layer | Shared ViTRM |
-| `moment_vitrm` | Existing CNN/RGB mean-and-standard-deviation moments | Shared ViTRM |
+| `linear_vitrm_1/2/4` | Flattened 32×32 RGB cells projected by one linear layer | Shared ViTRM at 1, 2, or 4 refinements |
+| `moment_vitrm_1/2/4` | Existing CNN/RGB mean-and-standard-deviation moments | Shared ViTRM at 1, 2, or 4 refinements |
 | `moment_direct` | Existing CNN/RGB moment encoder | Mean pooling plus a direct classifier |
 
 All variants use the same 144-token layout, positional embeddings, subject
@@ -179,7 +179,8 @@ python -m src.encoder_comparison \
   --output outputs/encoder_comparison \
   --device cuda \
   --epochs 10 \
-  --seeds 42 43 44
+  --seeds 42 43 44 \
+  --refinement-steps 1 2 4
 ```
 
 To reuse an existing subject split, pass its saved manifest:
@@ -189,13 +190,22 @@ python -m src.encoder_comparison \
   --dataset-root /kaggle/input/your-dataset \
   --reference-split outputs/YOUR_REFERENCE_RUN/split.json \
   --output outputs/encoder_comparison \
-  --device cuda
+  --device cuda \
+  --epochs 100 \
+  --seeds 42 43 44 \
+  --refinement-steps 1 2 4
 ```
 
 The runner writes `comparison_runs.csv`, `comparison_summary.csv`, one
 checkpoint and training history per variant/seed, and `protocol.json`.
 `comparison_summary.csv` reports mean and standard deviation across
-initialization seeds; those repetitions are not independent datasets.
+initialization seeds; those repetitions are not independent datasets. The
+direct classifier is trained once per seed, while each listed ViTRM depth is
+trained as a separate model. Each checkpoint is selected on validation loss;
+test pixels are loaded only after all depth/encoder checkpoints are selected.
+`comparison_runs.csv` also records `test_step_N_*` metrics for each available
+refinement step, allowing within-checkpoint prefix comparisons for the deeper
+ViTRM models.
 
 `src.moment_ablation` compares mean-pooled linear and MLP classifiers, the old
 TRM recurrence, and separately trained one- and two-refinement ViTRMs. Defaults
