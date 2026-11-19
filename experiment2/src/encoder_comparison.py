@@ -29,6 +29,7 @@ from torch import nn
 from torch.nn import functional as F
 from torch.utils.data import DataLoader, TensorDataset
 
+from .dataset import find_dataset_root
 from .image_quality_pipeline import build_dataset
 from .trm_data import (FaceSeverityDataset, create_subject_split, load_subject_split,
                        partition_frame, validate_image_sizes)
@@ -231,17 +232,20 @@ def main():
     config = json.loads(args.config.read_text())
     config["training"]["device"] = args.device
     config["training"]["precision"] = "float16" if args.device == "cuda" else "float32"
-    frame = build_dataset(args.dataset_root)
+    # Kaggle attached datasets are often wrapper directories containing the
+    # actual ``images`` and ``augmentation`` folders one level deeper.
+    dataset_root, dataset_manifest = find_dataset_root(args.dataset_root)
+    frame = build_dataset(dataset_root)
     validate_image_sizes(frame, config["preprocessing"])
     args.output.mkdir(parents=True, exist_ok=False)
     if args.reference_split:
-        split = load_subject_split(args.reference_split, frame, args.dataset_root)
+        split = load_subject_split(args.reference_split, frame, dataset_root)
     else:
-        split = create_subject_split(frame, config["split"]["seed"], project_root=args.dataset_root,
+        split = create_subject_split(frame, config["split"]["seed"], project_root=dataset_root,
                                      counts=config["split"]["counts"])
     (args.output / "split.json").write_text(json.dumps(split, indent=2) + "\n")
-    train_frame = partition_frame(split, "train", args.dataset_root)
-    val_frame = partition_frame(split, "validation", args.dataset_root)
+    train_frame = partition_frame(split, "train", dataset_root)
+    val_frame = partition_frame(split, "validation", dataset_root)
     train_pixels, train_labels = load_pixels(train_frame, config["preprocessing"])
     val_pixels, val_labels = load_pixels(val_frame, config["preprocessing"])
     rows = []
@@ -258,7 +262,7 @@ def main():
             if device.type == "cuda":
                 torch.cuda.empty_cache()
     # Do not touch test pixels until every model has selected its checkpoint.
-    test_frame = partition_frame(split, "test", args.dataset_root)
+    test_frame = partition_frame(split, "test", dataset_root)
     test_pixels, test_labels = load_pixels(test_frame, config["preprocessing"])
     for variant, seed, checkpoint_path in trained:
         checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
@@ -285,6 +289,7 @@ def main():
     (args.output / "protocol.json").write_text(json.dumps({
         "variants": VARIANTS, "seeds": args.seeds, "epochs": args.epochs,
         "batch_size": args.batch_size, "device": args.device,
+        "dataset_root": str(dataset_root), "dataset_manifest": dataset_manifest,
         "test_loaded_after_checkpoint_selection": True,
         "linear_definition": "3x32x32 cell flattened then one Linear(width)",
         "direct_definition": "moment tokens plus positions mean-pooled then LayerNorm/Linear",
